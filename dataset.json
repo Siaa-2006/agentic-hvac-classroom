@@ -1,0 +1,64 @@
+{
+  "scenarios": [
+    {
+      "scenario_id": "bangladesh_morning_sun_conflict",
+      "description": "Perimeter window zone of the Dhaka university classroom is heated by intense morning sun, while the interior desks remain cool.",
+      "window_zone": {
+        "telemetry": {
+          "air_temp_c": 28.5,
+          "relative_humidity": 45.0,
+          "co2_ppm": 600
+        },
+        "occupant_preferences": [22.0, 21.5, 22.0, 20.0]
+      },
+      "interior_zone": {
+        "telemetry": {
+          "air_temp_c": 20.5,
+          "relative_humidity": 48.0,
+          "co2_ppm": 620
+        },
+        "occupant_preferences": [23.0, 24.0, 23.5]
+      }
+    },
+    {
+      "scenario_id": "bangladesh_high_co2_emergency",
+      "description": "Temperatures are comfortable during a lecture, but CO2 levels rise dangerously high due to poor ventilation in a packed university room.",
+      "window_zone": {
+        "telemetry": {
+          "air_temp_c": 22.5,
+          "relative_humidity": 50.0,
+          "co2_ppm": 1850
+        },
+        "occupant_preferences": [22.5, 23.0]
+      },
+      "interior_zone": {
+        "telemetry": {
+          "air_temp_c": 23.0,
+          "relative_humidity": 51.0,
+          "co2_ppm": 1900
+        },
+        "occupant_preferences": [23.0, 22.5, 23.0]
+      }
+    },
+    {
+      "scenario_id": "bangladesh_empty_window_cold_interior",
+      "description": "The window row is vacant but hot from solar gain. The interior desks are packed with students who feel freezing.",
+      "window_zone": {
+        "telemetry": {
+          "air_temp_c": 29.0,
+          "relative_humidity": 40.0,
+          "co2_ppm": 400
+        },
+        "occupant_preferences": []
+      },
+      "interior_zone": {
+        "telemetry": {
+          "air_temp_c": 18.0,
+          "relative_humidity": 42.0,
+          "co2_ppm": 550
+        },
+        "occupant_preferences": [24.0, 25.0, 24.5, 25.0]
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+step,controller,w_temp,w_co2,i_temp,i_co2,actuator_mode,vav_window,vav_interior,vent_fan
+1,Agentic_LangGraph,26.82,1764.0,24.82,1914.0,COOL,80,60,HIGH
+2,Agentic_LangGraph,26.18,1229.3,24.31,1519.0,COOL,80,60,HIGH
+3,Agentic_LangGraph,25.53,951.2,23.82,1266.2,COOL,80,60,MED
+1,Baseline_Rule_Based,26.82,1764.0,24.82,1914.0,COOL,100,24,HIGH
+2,Baseline_Rule_Based,25.94,1065.6,24.74,1846.0,COOL,100,22,HIGH
+3,Baseline_Rule_Based,25.07,786.2,24.69,1805.1,COOL,97,20,HIGH

@@ -1,0 +1,11 @@
+column,description,type,units
+Timestamp,"Measurement timestamp, local Asia/Dhaka (UTC+06:00). Format: YYYY-MM-DD HH:MM:SS.","datetime (local, YYYY-MM-DD HH:MM:SS)",
+deviceId,Internal device identifier,integer,
+payload_id,Sequential packet/message index,integer,
+air_temperature,Air temperature,float,°C
+humidity,Relative humidity,float,%
+CO2,Carbon dioxide concentration,integer,ppm
+pm1,Particulate matter 1µm mass concentration,float,µg/m³
+pm2_5,Particulate matter 2.5µm mass concentration,float,µg/m³
+pm10,Particulate matter 10µm mass concentration,float,µg/m³
+air_pressure,Barometric pressure,integer,Pa
