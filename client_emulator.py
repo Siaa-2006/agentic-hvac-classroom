@@ -6,7 +6,7 @@ import requests
 import pandas as pd
 
 # --- Configuration ---
-API_URL = "http://127.0.0.1:8000/api/v1/telemetry"
+API_URL = "https://agentic-hvac-classroom.onrender.com/api/v1/telemetry"
 CSV_FILE = "cleaned_classrooms.csv"
 
 def print_dashboard(step, raw_telemetry, response_data):
