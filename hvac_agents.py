@@ -1,236 +1,596 @@
-import os
 import json
+import os
 import time
-import pandas as pd
-from typing import TypedDict, Annotated, List
-from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
+from typing import List, TypedDict
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import END, StateGraph
+
+from decision_output import (
+    ControlDecisionError,
+    deterministic_fallback,
+    validate_control_decision,
+)
 from translator import FuzzySymbolicTranslator
 
-# --- 1. Define the State (Multi-Zone Classroom Memory) ---
-class AgentState(TypedDict):
+
+class AgentState(TypedDict, total=False):
     scenario_id: str
     description: str
-    window_zone: dict        # Translated window zone data
-    interior_zone: dict      # Translated interior zone data
-    messages: List[str]      # The multi-agent debate transcript
-    final_decision: str      # The Supervisor's coordinated command
 
-# --- 2. Initialize the AI Brain (Prioritizing Free Groq) ---
+    window_zone: dict
+    interior_zone: dict
+
+    messages: List[str]
+
+    final_decision: str
+    control_signals: dict
+
+    decision_source: str
+    raw_supervisor_output: str
+    validation_error: str
+
+
+# =========================================================
+# LLM SETUP
+# =========================================================
+
 llm = None
 provider_name = ""
 
-# Check for Groq first (Highly recommended free alternative, 14,400 requests/day)
+
 if os.environ.get("GROQ_API_KEY"):
     try:
         from langchain_groq import ChatGroq
-        # Using Llama-3.3-70b for advanced reasoning and spatial synthesis
-        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.2, max_retries=3)
+
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0.2,
+            max_retries=3,
+        )
+
         provider_name = "Groq (Llama-3.3-70b)"
-    except ImportError:
-        print("\n⚠️  To use Groq, please install: pip install langchain-groq")
 
-# Fallback 1: Google Gemini (Free tier, but limited to 20 daily requests)
-elif os.environ.get("GEMINI_API_KEY") and not llm:
+    except ImportError:
+        print(
+            "Install Groq support using: "
+            "pip install langchain-groq"
+        )
+
+
+elif os.environ.get("GEMINI_API_KEY"):
     try:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2, max_retries=0)
-        provider_name = "Google Gemini (gemini-2.5-flash)"
-    except ImportError:
-        print("\n⚠️  To use Gemini, please install: pip install langchain-google-genai")
+        from langchain_google_genai import (
+            ChatGoogleGenerativeAI,
+        )
 
-# Fallback 2: OpenAI (Paid developer account required)
-elif os.environ.get("OPENAI_API_KEY") and not llm:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            temperature=0.2,
+            max_retries=0,
+        )
+
+        provider_name = "Google Gemini"
+
+    except ImportError:
+        print(
+            "Install Gemini support using: "
+            "pip install langchain-google-genai"
+        )
+
+
+elif os.environ.get("OPENAI_API_KEY"):
     try:
         from langchain_openai import ChatOpenAI
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2, max_retries=0)
-        provider_name = "OpenAI (gpt-4o-mini)"
+
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.2,
+            max_retries=0,
+        )
+
+        provider_name = "OpenAI"
+
     except ImportError:
-        print("\n⚠️  To use OpenAI, please install: pip install langchain-openai")
+        print(
+            "Install OpenAI support using: "
+            "pip install langchain-openai"
+        )
 
 
-# --- 3. Robust Invoke Helper with Exponential Backoff ---
-def invoke_with_retry(llm, messages, max_retries=5):
-    """
-    Invokes the LLM with custom backoff.
-    Ensures free-tier rate limits are handled gracefully with terminal alerts.
-    """
-    # Small 1-second delay to preserve request pacing
+def invoke_with_retry(
+    active_llm,
+    messages,
+    max_retries: int = 5,
+):
     time.sleep(1.0)
-    
+
     delays = [2, 4, 8, 16, 32]
-    for i, delay in enumerate(delays):
+
+    for index, delay in enumerate(delays):
         try:
-            return llm.invoke(messages)
-        except Exception as e:
-            err_str = str(e).lower()
-            
-            # Identify rate limits
-            is_rate_limit = any(term in err_str for term in ["429", "resource_exhausted", "rate_limit", "quota", "exhausted"])
-            if is_rate_limit and i < max_retries - 1:
-                print(f"  ⚠️  [Rate Limit Alert] Speed limits reached. Pausing for {delay}s before retrying...")
+            return active_llm.invoke(messages)
+
+        except Exception as error:
+            error_text = str(error).lower()
+
+            is_rate_limit = any(
+                term in error_text
+                for term in [
+                    "429",
+                    "resource_exhausted",
+                    "rate_limit",
+                    "quota",
+                    "exhausted",
+                ]
+            )
+
+            if is_rate_limit and index < max_retries - 1:
+                print(
+                    f"Rate limit reached. Retrying after "
+                    f"{delay} seconds..."
+                )
+
                 time.sleep(delay)
                 continue
-            raise e
-            
-    return llm.invoke(messages)
+
+            raise
+
+    return active_llm.invoke(messages)
 
 
-# --- 4. Define the Multi-Zone Expert Nodes ---
+# =========================================================
+# WINDOW-ZONE AGENT
+# =========================================================
 
 def window_zone_expert(state: AgentState):
-    """Advocates strictly for the comfort and air quality of the window perimeter zone."""
     if not llm:
-        raise ValueError("No LLM provider configured. Please set GROQ_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY.")
-        
-    data = state["window_zone"]["semantic_state"]
-    meta = state["window_zone"]["meta"]
-    
+        raise ValueError(
+            "No LLM provider configured."
+        )
+
+    semantic_data = state["window_zone"]["semantic_state"]
+    metadata = state["window_zone"]["meta"]
+
     messages = [
-        SystemMessage(content="You are the Window Zone Expert. Your sole responsibility is to advocate for the comfort and safety of occupants sitting next to the windows. You ignore the interior of the room."),
-        HumanMessage(content=f"""Window Zone Physical State: Temp {meta['actual_temp_c']}°C, CO2 {meta['actual_co2_ppm']} ppm.
-Fuzzy Status: Thermal state is '{data['thermal_condition']}', Air Purity is '{data['air_purity']}', occupant demand is '{data['group_comfort_sentiment']}'.
-What specific HVAC action does the Window Zone need? Support your claim in 2 clear sentences.""")
+        SystemMessage(
+            content=(
+                "You are the Window Zone Expert. Advocate only "
+                "for the comfort and air quality of occupants "
+                "near the windows. Ignore the interior zone."
+            )
+        ),
+
+        HumanMessage(
+            content=(
+                f"Window Zone Physical State:\n"
+                f"Temperature: "
+                f"{metadata['actual_temp_c']} °C\n"
+                f"CO2: "
+                f"{metadata['actual_co2_ppm']} ppm\n\n"
+
+                f"Thermal condition: "
+                f"{semantic_data['thermal_condition']}\n"
+                f"Air purity: "
+                f"{semantic_data['air_purity']}\n"
+                f"Occupant demand: "
+                f"{semantic_data['group_comfort_sentiment']}\n\n"
+
+                "Recommend a specific HVAC action and support "
+                "your recommendation in two clear sentences."
+            )
+        ),
     ]
-    
+
     response = invoke_with_retry(llm, messages)
-    state["messages"].append(f"Window Zone Expert: {response.content}")
+
+    state.setdefault("messages", []).append(
+        f"Window Zone Expert: {response.content}"
+    )
+
     return state
 
+
+# =========================================================
+# INTERIOR-ZONE AGENT
+# =========================================================
 
 def interior_zone_expert(state: AgentState):
-    """Advocates strictly for the comfort and air quality of the interior zone."""
     if not llm:
-        raise ValueError("No LLM provider configured.")
-        
-    data = state["interior_zone"]["semantic_state"]
-    meta = state["interior_zone"]["meta"]
-    
+        raise ValueError(
+            "No LLM provider configured."
+        )
+
+    semantic_data = state["interior_zone"]["semantic_state"]
+    metadata = state["interior_zone"]["meta"]
+
     messages = [
-        SystemMessage(content="You are the Interior Zone Expert. Your sole responsibility is to advocate for the comfort and safety of occupants sitting in the interior desks (away from windows). You ignore the window perimeter."),
-        HumanMessage(content=f"""Interior Zone Physical State: Temp {meta['actual_temp_c']}°C, CO2 {meta['actual_co2_ppm']} ppm.
-Fuzzy Status: Thermal state is '{data['thermal_condition']}', Air Purity is '{data['air_purity']}', occupant demand is '{data['group_comfort_sentiment']}'.
-What specific HVAC action does the Interior Zone need? Support your claim in 2 clear sentences.""")
+        SystemMessage(
+            content=(
+                "You are the Interior Zone Expert. Advocate "
+                "only for the comfort and air quality of "
+                "occupants at the interior desks. Ignore the "
+                "window zone."
+            )
+        ),
+
+        HumanMessage(
+            content=(
+                f"Interior Zone Physical State:\n"
+                f"Temperature: "
+                f"{metadata['actual_temp_c']} °C\n"
+                f"CO2: "
+                f"{metadata['actual_co2_ppm']} ppm\n\n"
+
+                f"Thermal condition: "
+                f"{semantic_data['thermal_condition']}\n"
+                f"Air purity: "
+                f"{semantic_data['air_purity']}\n"
+                f"Occupant demand: "
+                f"{semantic_data['group_comfort_sentiment']}\n\n"
+
+                "Recommend a specific HVAC action and support "
+                "your recommendation in two clear sentences."
+            )
+        ),
     ]
-    
+
     response = invoke_with_retry(llm, messages)
-    state["messages"].append(f"Interior Zone Expert: {response.content}")
+
+    state.setdefault("messages", []).append(
+        f"Interior Zone Expert: {response.content}"
+    )
+
     return state
 
+
+# =========================================================
+# SUPERVISOR JSON FORMAT
+# =========================================================
+
+JSON_OUTPUT_INSTRUCTION = """
+Return ONLY one valid JSON object with exactly these fields:
+
+{
+  "hvac_mode": "COOL",
+  "window_damper_pct": 70,
+  "interior_damper_pct": 60,
+  "fan_speed": "MED",
+  "reasoning": "Brief explanation of how both zone demands were balanced."
+}
+
+Rules:
+
+1. hvac_mode must be exactly:
+   COOL, HEAT, or OFF.
+
+2. window_damper_pct must be an integer from 0 to 100.
+
+3. interior_damper_pct must be an integer from 0 to 100.
+
+4. fan_speed must be exactly:
+   OFF, LOW, MED, or HIGH.
+
+5. reasoning must briefly explain the conflict resolution.
+
+6. Do not include Markdown fences.
+
+7. Do not include any text outside the JSON object.
+""".strip()
+
+
+# =========================================================
+# SUPERVISORY AGENT
+# =========================================================
 
 def multi_zone_supervisor(state: AgentState):
-    """Resolves spatial conflicts, balances ventilation, and coordinates central HVAC hardware actuators."""
     if not llm:
-        raise ValueError("No LLM provider configured.")
-        
-    debate_log = "\n".join(state["messages"])
-    w_meta = state["window_zone"]["meta"]
-    i_meta = state["interior_zone"]["meta"]
-    
-    messages = [
-        SystemMessage(content="You are the Head Multi-Zone HVAC Supervisor. Your job is to read recommendations from both Zone Experts and coordinate a central control plan. You must decide: Central heating/cooling mode, Window Zone VAV damper position (0-100%), Interior Zone VAV damper position (0-100%), and Ventilation Fan speed (Off/Low/Med/High)."),
-        HumanMessage(content=f"""Classroom Spatial Telemetry:
-- Window Zone: {w_meta['actual_temp_c']}°C, {w_meta['actual_co2_ppm']} ppm CO2 (Requested: {w_meta['avg_requested_temp']}°C)
-- Interior Zone: {i_meta['actual_temp_c']}°C, {i_meta['actual_co2_ppm']} ppm CO2 (Requested: {i_meta['avg_requested_temp']}°C)
+        raise ValueError(
+            "No LLM provider configured."
+        )
 
-Here is the debate from the Zone Experts:
-{debate_log}
+    debate_log = "\n".join(
+        state.get("messages", [])
+    )
 
-Resolve any conflicts (such as one zone needing heat while the other needs cooling) and issue a final, coordinated control plan. Keep your decision to exactly 3 sentences.""")
+    window_metadata = state["window_zone"]["meta"]
+    interior_metadata = state["interior_zone"]["meta"]
+
+    supervisor_messages = [
+        SystemMessage(
+            content=(
+                "You are the Head Multi-Zone HVAC Supervisor. "
+                "Read both zone recommendations and coordinate "
+                "one classroom-level control plan. Select one "
+                "central HVAC mode, one window-zone damper "
+                "percentage, one interior-zone damper "
+                "percentage, and one ventilation-fan level."
+            )
+        ),
+
+        HumanMessage(
+            content=(
+                "Classroom Spatial Telemetry:\n\n"
+
+                f"Window Zone:\n"
+                f"- Temperature: "
+                f"{window_metadata['actual_temp_c']} °C\n"
+                f"- CO2: "
+                f"{window_metadata['actual_co2_ppm']} ppm\n"
+                f"- Requested temperature: "
+                f"{window_metadata['avg_requested_temp']} °C\n\n"
+
+                f"Interior Zone:\n"
+                f"- Temperature: "
+                f"{interior_metadata['actual_temp_c']} °C\n"
+                f"- CO2: "
+                f"{interior_metadata['actual_co2_ppm']} ppm\n"
+                f"- Requested temperature: "
+                f"{interior_metadata['avg_requested_temp']} °C\n\n"
+
+                f"Zone recommendations:\n"
+                f"{debate_log}\n\n"
+
+                "Resolve any conflict between the zones, "
+                "including cases where one zone requests "
+                "heating and the other requests cooling.\n\n"
+
+                f"{JSON_OUTPUT_INSTRUCTION}"
+            )
+        ),
     ]
-    
-    response = invoke_with_retry(llm, messages)
-    state["final_decision"] = response.content
+
+    first_response = invoke_with_retry(
+        llm,
+        supervisor_messages,
+    )
+
+    raw_output = first_response.content
+    validation_error = ""
+
+    try:
+        decision = validate_control_decision(
+            raw_output
+        )
+
+        decision_source = "llm_validated"
+
+    except ControlDecisionError as first_error:
+        validation_error = str(first_error)
+
+        corrective_messages = [
+            SystemMessage(
+                content=(
+                    "You repair invalid HVAC control JSON. "
+                    "Return only the corrected JSON object "
+                    "and no additional text."
+                )
+            ),
+
+            HumanMessage(
+                content=(
+                    "The previous supervisor response failed "
+                    "validation.\n\n"
+
+                    f"Invalid response:\n"
+                    f"{raw_output}\n\n"
+
+                    f"Validation error:\n"
+                    f"{validation_error}\n\n"
+
+                    f"{JSON_OUTPUT_INSTRUCTION}"
+                )
+            ),
+        ]
+
+        retry_response = invoke_with_retry(
+            llm,
+            corrective_messages,
+        )
+
+        raw_output = retry_response.content
+
+        try:
+            decision = validate_control_decision(
+                raw_output
+            )
+
+            decision_source = "llm_corrective_retry"
+
+        except ControlDecisionError as retry_error:
+            validation_error = (
+                f"First attempt: {validation_error} | "
+                f"Corrective retry: {retry_error}"
+            )
+
+            decision = deterministic_fallback(
+                window_meta=window_metadata,
+                interior_meta=interior_metadata,
+            )
+
+            decision_source = "rule_based_fallback"
+
+    state["final_decision"] = decision["reasoning"]
+
+    state["control_signals"] = {
+        "hvac_mode": decision["hvac_mode"],
+
+        "window_damper_pct":
+            decision["window_damper_pct"],
+
+        "interior_damper_pct":
+            decision["interior_damper_pct"],
+
+        "fan_speed": decision["fan_speed"],
+    }
+
+    state["decision_source"] = decision_source
+    state["raw_supervisor_output"] = raw_output
+    state["validation_error"] = validation_error
+
     return state
 
 
-# --- 5. Build the Graph (The Multi-Zone Workflow) ---
+# =========================================================
+# LANGGRAPH WORKFLOW
+# =========================================================
+
 workflow = StateGraph(AgentState)
 
-workflow.add_node("window_zone_expert", window_zone_expert)
-workflow.add_node("interior_zone_expert", interior_zone_expert)
-workflow.add_node("supervisor", multi_zone_supervisor)
+workflow.add_node(
+    "window_zone_expert",
+    window_zone_expert,
+)
 
-workflow.set_entry_point("window_zone_expert")
-workflow.add_edge("window_zone_expert", "interior_zone_expert")
-workflow.add_edge("interior_zone_expert", "supervisor")
-workflow.add_edge("supervisor", END)
+workflow.add_node(
+    "interior_zone_expert",
+    interior_zone_expert,
+)
+
+workflow.add_node(
+    "supervisor",
+    multi_zone_supervisor,
+)
+
+workflow.set_entry_point(
+    "window_zone_expert"
+)
+
+workflow.add_edge(
+    "window_zone_expert",
+    "interior_zone_expert",
+)
+
+workflow.add_edge(
+    "interior_zone_expert",
+    "supervisor",
+)
+
+workflow.add_edge(
+    "supervisor",
+    END,
+)
 
 hvac_app = workflow.compile()
 
 
-# --- 6. Run the Simulation ---
-def map_json_telemetry_to_translator(telemetry):
-    """Maps scenario telemetry keys to keys expected by translator.py."""
+def map_json_telemetry_to_translator(
+    telemetry: dict,
+) -> dict:
     return {
         "temperature": telemetry["air_temp_c"],
         "co2": telemetry["co2_ppm"],
-        "humidity": telemetry["relative_humidity"]
+        "humidity": telemetry["relative_humidity"],
     }
 
+
+# =========================================================
+# OPTIONAL DIRECT TEST
+# =========================================================
+
 if __name__ == "__main__":
-    print("=== LangGraph Multi-Zone HVAC Control Chamber ===")
-    
-    # Validation Warning
+    print(
+        "=== LangGraph Multi-Zone HVAC Control ==="
+    )
+
     if not llm:
-        print("\n⚠️  ERROR: No active LLM provider found.")
-        print("Please configure your Groq key in your terminal:")
-        print("export GROQ_API_KEY='your-key-here' && pip install langchain-groq\n")
-        exit()
+        print(
+            "No active LLM provider was found."
+        )
 
-    print(f"Using Provider: {provider_name}\n")
+        print(
+            "Set GROQ_API_KEY, GEMINI_API_KEY, "
+            "or OPENAI_API_KEY."
+        )
 
-    # Load scenarios
+        raise SystemExit(1)
+
+    print(f"Using Provider: {provider_name}")
+
     try:
-        with open("dataset.json", "r") as f:
-            scenarios_data = json.load(f)
+        with open(
+            "dataset.json",
+            "r",
+            encoding="utf-8",
+        ) as file:
+            scenarios_data = json.load(file)
+
     except FileNotFoundError:
-        print("ERROR: dataset.json not found in this folder.")
-        exit()
+        print(
+            "dataset.json was not found."
+        )
+
+        raise SystemExit(1)
 
     translator = FuzzySymbolicTranslator()
 
-    # Loop and run the debate for each distinct scenario
-    for index, scenario in enumerate(scenarios_data["scenarios"]):
-        # Add a light pacing delay
+    for index, scenario in enumerate(
+        scenarios_data["scenarios"]
+    ):
         if index > 0:
             time.sleep(1.0)
 
-        print(f"\n" + "="*60)
-        print(f"SCENARIO: {scenario['scenario_id']}")
-        print(f"Description: {scenario['description']}")
-        print("="*60)
+        window_raw = (
+            map_json_telemetry_to_translator(
+                scenario["window_zone"]["telemetry"]
+            )
+        )
 
-        w_raw = map_json_telemetry_to_translator(scenario["window_zone"]["telemetry"])
-        w_prefs = scenario["window_zone"]["occupant_preferences"]
-        w_translated = translator.translate_payload(w_raw, w_prefs)
+        interior_raw = (
+            map_json_telemetry_to_translator(
+                scenario["interior_zone"]["telemetry"]
+            )
+        )
 
-        i_raw = map_json_telemetry_to_translator(scenario["interior_zone"]["telemetry"])
-        i_prefs = scenario["interior_zone"]["occupant_preferences"]
-        i_translated = translator.translate_payload(i_raw, i_prefs)
+        window_translated = translator.translate_payload(
+            window_raw,
+            scenario["window_zone"][
+                "occupant_preferences"
+            ],
+        )
+
+        interior_translated = translator.translate_payload(
+            interior_raw,
+            scenario["interior_zone"][
+                "occupant_preferences"
+            ],
+        )
 
         initial_state = AgentState(
             scenario_id=scenario["scenario_id"],
             description=scenario["description"],
-            window_zone=w_translated,
-            interior_zone=i_translated,
+
+            window_zone=window_translated,
+            interior_zone=interior_translated,
+
             messages=[],
-            final_decision=""
+
+            final_decision="",
+            control_signals={},
+
+            decision_source="",
+            raw_supervisor_output="",
+            validation_error="",
         )
 
-        print("Running spatial consensus debate...")
-        try:
-            final_state = hvac_app.invoke(initial_state)
-            
-            print("\n--- EXPERT RECOMMENDATIONS ---")
-            for msg in final_state["messages"]:
-                print(f"🗣️  {msg}")
-            
-            print("\n⚖️  COORDINATED SUPERVISOR CONTROL ACTION:")
-            print(final_state["final_decision"])
-            print("-"*60)
-            
-        except Exception as e:
-            print("\n❌ Error during graph execution:")
-            print(f"Details: {str(e)}")
-            break
+        final_state = hvac_app.invoke(
+            initial_state
+        )
+
+        print("\n--- EXPERT RECOMMENDATIONS ---")
+
+        for message in final_state["messages"]:
+            print(message)
+
+        print("\n--- VALIDATED CONTROL SIGNALS ---")
+        print(final_state["control_signals"])
+
+        print(
+            "Decision source:",
+            final_state["decision_source"],
+        )
+
+        print(
+            "Reasoning:",
+            final_state["final_decision"],
+        )

@@ -1,241 +1,705 @@
 import os
 import sys
 import time
-import re
+
 import pandas as pd
+
 from translator import FuzzySymbolicTranslator
 
 try:
     from hvac_agents import hvac_app, AgentState
+
 except ImportError:
-    print("❌ Error: Could not import hvac_app or AgentState from hvac_agents.py.")
+    print(
+        "Could not import hvac_app or AgentState "
+        "from hvac_agents.py."
+    )
+
     sys.exit(1)
 
-def parse_supervisor_decision(decision_text: str):
-    text_lower = decision_text.lower()
-    hvac_mode = "OFF"
-    if "cool" in text_lower or "chilling" in text_lower:
-        hvac_mode = "COOL"
-    elif "heat" in text_lower or "warm" in text_lower:
-        hvac_mode = "HEAT"
 
-    clauses = re.split(r'[,.;]|\band\b|\bwhile\b|\bbut\b', text_lower)
-    w_damper = 50  
-    i_damper = 50  
-    
-    for clause in clauses:
-        pct_match = re.search(r'(\d+)\s*%', clause)
-        if pct_match:
-            pct_val = int(pct_match.group(1))
-            has_window = any(kw in clause for kw in ["window", "perimeter"])
-            has_interior = any(kw in clause for kw in ["interior", "desk", "hallway"])
-            
-            if has_window and has_interior:
-                w_pos = clause.find("window") if "window" in clause else clause.find("perimeter")
-                i_pos = clause.find("interior") if "interior" in clause else clause.find("desk")
-                pct_pos = pct_match.start()
-                if abs(w_pos - pct_pos) < abs(i_pos - pct_pos):
-                    w_damper = pct_val
-                else:
-                    i_damper = pct_val
-            elif has_window:
-                w_damper = pct_val
-            elif has_interior:
-                i_damper = pct_val
+# =========================================================
+# RULE-BASED BASELINE
+# =========================================================
 
-    fan_speed = "OFF"
-    if re.search(r'\bhigh\b', text_lower):
+def run_baseline_controller(
+    room_state: dict,
+    window_preferences: list[float],
+    interior_preferences: list[float],
+) -> dict:
+    window_target = (
+        sum(window_preferences)
+        / len(window_preferences)
+        if window_preferences
+        else 22.0
+    )
+
+    interior_target = (
+        sum(interior_preferences)
+        / len(interior_preferences)
+        if interior_preferences
+        else 22.0
+    )
+
+    average_error = (
+        (
+            room_state["w_temp"]
+            - window_target
+        )
+        +
+        (
+            room_state["i_temp"]
+            - interior_target
+        )
+    ) / 2.0
+
+    hvac_mode = (
+        "COOL"
+        if average_error > 0.5
+        else "OFF"
+    )
+
+    if hvac_mode == "COOL":
+        window_damper = max(
+            10,
+            min(
+                100,
+                int(
+                    (
+                        room_state["w_temp"]
+                        - window_target
+                    )
+                    * 35
+                ),
+            ),
+        )
+
+        interior_damper = max(
+            10,
+            min(
+                100,
+                int(
+                    (
+                        room_state["i_temp"]
+                        - interior_target
+                    )
+                    * 35
+                ),
+            ),
+        )
+
+    else:
+        window_damper = 10
+        interior_damper = 10
+
+    maximum_co2 = max(
+        room_state["w_co2"],
+        room_state["i_co2"],
+    )
+
+    if maximum_co2 > 1200:
         fan_speed = "HIGH"
-    elif re.search(r'\b(?:medium|med)\b', text_lower):
+
+    elif maximum_co2 > 950:
         fan_speed = "MED"
-    elif re.search(r'\blow\b', text_lower):
-        fan_speed = "LOW"
-    elif re.search(r'\boff\b', text_lower):
-        fan_speed = "OFF"
-    elif "ventilation" in text_lower or "fan" in text_lower:
+
+    elif maximum_co2 > 650:
         fan_speed = "LOW"
 
-    return {
-        "hvac_mode": hvac_mode,
-        "window_damper_pct": max(0, min(100, w_damper)),
-        "interior_damper_pct": max(0, min(100, i_damper)),
-        "fan_speed": fan_speed
-    }
-
-def run_baseline_controller(room_state: dict, w_pref: list, i_pref: list):
-    w_target = sum(w_pref) / len(w_pref) if w_pref else 22.0
-    i_target = sum(i_pref) / len(i_pref) if i_pref else 22.0
-
-    avg_error = ((room_state["w_temp"] - w_target) + (room_state["i_temp"] - i_target)) / 2.0
-    hvac_mode = "COOL" if avg_error > 0.5 else "OFF"
-
-    w_damper = max(10, min(100, int((room_state["w_temp"] - w_target) * 35))) if hvac_mode == "COOL" else 10
-    i_damper = max(10, min(100, int((room_state["i_temp"] - i_target) * 35))) if hvac_mode == "COOL" else 10
-
-    max_co2 = max(room_state["w_co2"], room_state["i_co2"])
-    if max_co2 > 1200:
-        fan_speed = "HIGH"
-    elif max_co2 > 950:
-        fan_speed = "MED"
-    elif max_co2 > 650:
-        fan_speed = "LOW"
     else:
         fan_speed = "OFF"
 
     return {
         "hvac_mode": hvac_mode,
-        "window_damper_pct": w_damper,
-        "interior_damper_pct": i_damper,
-        "fan_speed": fan_speed
+        "window_damper_pct": window_damper,
+        "interior_damper_pct": interior_damper,
+        "fan_speed": fan_speed,
     }
 
-def update_classroom_physics(current_state: dict, control: dict, occupancy: int, ambient_temp: float = 32.5):
-    w_temp = current_state["w_temp"]
-    w_co2 = current_state["w_co2"]
-    i_temp = current_state["i_temp"]
-    i_co2 = current_state["i_co2"]
-    
+
+# =========================================================
+# SIMPLIFIED CLASSROOM UPDATE MODEL
+# =========================================================
+
+def update_classroom_physics(
+    current_state: dict,
+    control: dict,
+    occupancy: int,
+    ambient_temp: float = 32.5,
+) -> dict:
+    window_temp = current_state["w_temp"]
+    window_co2 = current_state["w_co2"]
+
+    interior_temp = current_state["i_temp"]
+    interior_co2 = current_state["i_co2"]
+
     mode = control["hvac_mode"]
-    w_damp = control["window_damper_pct"] / 100.0
-    i_damp = control["interior_damper_pct"] / 100.0
-    fan = control["fan_speed"]
 
-    fan_flow_map = {"OFF": 0.0, "LOW": 0.15, "MED": 0.35, "HIGH": 0.60}
-    fan_flow = fan_flow_map.get(fan, 0.0)
+    window_damper = (
+        control["window_damper_pct"]
+        / 100.0
+    )
 
-    occ_window = int(occupancy * 0.4)
-    occ_interior = occupancy - occ_window
+    interior_damper = (
+        control["interior_damper_pct"]
+        / 100.0
+    )
 
-    # Window Zone Thermal Updates
-    w_solar_gain = 0.52  
-    w_metabolic_gain = occ_window * 0.012  
-    w_thermal_exchange = 0.06 * (ambient_temp - w_temp)
-    w_cooling = w_damp * 1.42 if mode == "COOL" else 0.0
-    w_temp_next = w_temp + w_solar_gain + w_metabolic_gain + w_thermal_exchange - w_cooling
+    fan_flow_map = {
+        "OFF": 0.0,
+        "LOW": 0.15,
+        "MED": 0.35,
+        "HIGH": 0.60,
+    }
 
-    # Window Zone Air Volume CO2
-    w_co2_generation = 40.0 + (occ_window * 13.5)
-    w_co2_dilution = w_damp * fan_flow * (w_co2 - 400.0)
-    w_co2_next = max(400.0, w_co2 + w_co2_generation - w_co2_dilution)
+    fan_flow = fan_flow_map.get(
+        control["fan_speed"],
+        0.0,
+    )
 
-    # Interior Zone Thermal Updates
-    i_solar_gain = 0.05
-    i_metabolic_gain = occ_interior * 0.015
-    i_thermal_exchange = 0.04 * (26.0 - i_temp)
-    i_cooling = i_damp * 1.42 if mode == "COOL" else 0.0
-    i_temp_next = i_temp + i_solar_gain + i_metabolic_gain + i_thermal_exchange - i_cooling
+    window_occupancy = int(
+        occupancy * 0.4
+    )
 
-    # Interior Zone Air Volume CO2
-    i_co2_generation = 40.0 + (occ_interior * 16.0)
-    i_co2_dilution = i_damp * fan_flow * (i_co2 - 400.0)
-    i_co2_next = max(400.0, i_co2 + i_co2_generation - i_co2_dilution)
+    interior_occupancy = (
+        occupancy - window_occupancy
+    )
+
+    window_temp_next = (
+        window_temp
+        + 0.52
+        + window_occupancy * 0.012
+        + 0.06
+        * (ambient_temp - window_temp)
+        - (
+            window_damper * 1.42
+            if mode == "COOL"
+            else 0.0
+        )
+    )
+
+    window_co2_next = max(
+        400.0,
+        window_co2
+        + 40.0
+        + window_occupancy * 13.5
+        - (
+            window_damper
+            * fan_flow
+            * (window_co2 - 400.0)
+        ),
+    )
+
+    interior_temp_next = (
+        interior_temp
+        + 0.05
+        + interior_occupancy * 0.015
+        + 0.04
+        * (26.0 - interior_temp)
+        - (
+            interior_damper * 1.42
+            if mode == "COOL"
+            else 0.0
+        )
+    )
+
+    interior_co2_next = max(
+        400.0,
+        interior_co2
+        + 40.0
+        + interior_occupancy * 16.0
+        - (
+            interior_damper
+            * fan_flow
+            * (interior_co2 - 400.0)
+        ),
+    )
 
     return {
-        "w_temp": round(w_temp_next, 2),
-        "w_co2": round(w_co2_next, 1),
-        "i_temp": round(i_temp_next, 2),
-        "i_co2": round(i_co2_next, 1)
+        "w_temp": round(
+            window_temp_next,
+            2,
+        ),
+
+        "w_co2": round(
+            window_co2_next,
+            1,
+        ),
+
+        "i_temp": round(
+            interior_temp_next,
+            2,
+        ),
+
+        "i_co2": round(
+            interior_co2_next,
+            1,
+        ),
     }
 
-def run_simulation_campaign(steps=12):
-    print("================================================================")
-    print("🌅 STARTING DYNAMIC 12-HOUR BENCHMARK CO-SIMULATION")
-    print("================================================================")
+
+def create_agent_state(
+    step: int,
+    phase: str,
+    window_translated: dict,
+    interior_translated: dict,
+) -> AgentState:
+    return AgentState(
+        scenario_id=f"step_{step}",
+        description=phase,
+
+        window_zone=window_translated,
+        interior_zone=interior_translated,
+
+        messages=[],
+
+        final_decision="",
+        control_signals={},
+
+        decision_source="",
+        raw_supervisor_output="",
+        validation_error="",
+    )
+
+
+# =========================================================
+# MAIN EXPERIMENT
+# =========================================================
+
+def run_simulation_campaign(
+    steps: int = 12,
+) -> None:
+    if not any(
+        os.environ.get(key)
+        for key in [
+            "GROQ_API_KEY",
+            "GEMINI_API_KEY",
+            "OPENAI_API_KEY",
+        ]
+    ):
+        print(
+            "No LLM API key is configured."
+        )
+
+        sys.exit(1)
 
     try:
-        df = pd.read_csv("cleaned_classrooms.csv")
-        print(f"Successfully loaded {len(df)} rows of Bangladesh classroom telemetry.")
-    except FileNotFoundError:
-        print("❌ Error: cleaned_classrooms.csv not found. Run data_cleaner.py first.")
-        return
+        classroom_data = pd.read_csv(
+            "cleaned_classrooms.csv"
+        )
 
-    start_state = {
-        "w_temp": 24.5,   
-        "w_co2": 450.0,   
+    except FileNotFoundError:
+        print(
+            "cleaned_classrooms.csv was not found."
+        )
+
+        sys.exit(1)
+
+    if "temperature" not in classroom_data.columns:
+        print(
+            "cleaned_classrooms.csv has no "
+            "'temperature' column."
+        )
+
+        sys.exit(1)
+
+    if len(classroom_data) <= 1212:
+        print(
+            "cleaned_classrooms.csv needs at least "
+            "1213 rows."
+        )
+
+        sys.exit(1)
+
+    initial_state = {
+        "w_temp": 24.5,
+        "w_co2": 450.0,
+
         "i_temp": 23.5,
-        "i_co2": 480.0
+        "i_co2": 480.0,
     }
 
     schedule = {
-        1:  (40, "Lecture 1 Begins (High Density)"),
-        2:  (40, "Lecture 1 Ongoing"),
-        3:  (5,  "10:30 AM Mid-morning Break"),
-        4:  (25, "Lecture 2 Begins (Medium Density)"),
-        5:  (25, "Lecture 2 Ongoing"),
-        6:  (0,  "12:30 PM Lunch Break (Vacant)"),
-        7:  (45, "Lecture 3 Begins (Peak Class Density)"),
-        8:  (45, "Lecture 3 Ongoing"),
-        9:  (10, "3:00 PM Short Recess"),
-        10: (20, "Lab Session (Medium Density)"),
-        11: (20, "Lab Session Ongoing"),
-        12: (0,  "5:00 PM Class Dismissed")
+        1: (
+            40,
+            "Lecture 1 Begins (High Density)",
+        ),
+
+        2: (
+            40,
+            "Lecture 1 Ongoing",
+        ),
+
+        3: (
+            5,
+            "Mid-Morning Break",
+        ),
+
+        4: (
+            25,
+            "Lecture 2 Begins (Medium Density)",
+        ),
+
+        5: (
+            25,
+            "Lecture 2 Ongoing",
+        ),
+
+        6: (
+            0,
+            "Lunch Break (Vacant)",
+        ),
+
+        7: (
+            45,
+            "Lecture 3 Begins (Peak Density)",
+        ),
+
+        8: (
+            45,
+            "Lecture 3 Ongoing",
+        ),
+
+        9: (
+            10,
+            "Short Recess",
+        ),
+
+        10: (
+            20,
+            "Lab Session",
+        ),
+
+        11: (
+            20,
+            "Lab Session Ongoing",
+        ),
+
+        12: (
+            0,
+            "Class Dismissed",
+        ),
     }
 
-    w_pref = [22.0, 21.5, 22.0]  
-    i_pref = [24.0, 24.5, 23.5]  
+    window_preferences = [
+        22.0,
+        21.5,
+        22.0,
+    ]
 
-    experiment_logs = []
-    agent_state = start_state.copy()
+    interior_preferences = [
+        24.0,
+        24.5,
+        23.5,
+    ]
+
     translator = FuzzySymbolicTranslator()
 
-    print("\n[Executing Simulation Run A: Fuzzy-Symbolic Agentic Control (Groq/Llama)]")
-    for step in range(1, steps + 1):
-        occ, phase = schedule[step]
-        print(f"  Step {step}/12 - {phase} | Students: {occ} ...")
-        
-        w_trans = translator.translate_payload({"temperature": agent_state["w_temp"], "co2": agent_state["w_co2"], "humidity": 55.0}, w_pref)
-        i_trans = translator.translate_payload({"temperature": agent_state["i_temp"], "co2": agent_state["i_co2"], "humidity": 55.0}, i_pref)
+    experiment_logs = []
+    reasoning_logs = []
 
-        payload = AgentState(
-            scenario_id=f"step_{step}",
-            description=phase,
-            window_zone=w_trans,
-            interior_zone=i_trans,
-            messages=[],
-            final_decision=""
+    # =====================================================
+    # AGENTIC CONTROLLER
+    # =====================================================
+
+    print(
+        "RUN A: Validated Agentic Controller"
+    )
+
+    agent_state = initial_state.copy()
+
+    for step in range(1, steps + 1):
+        occupancy, phase = schedule[step]
+
+        print(
+            f"Agentic step {step}/12: {phase}"
         )
 
-        result = hvac_app.invoke(payload)
-        signals = parse_supervisor_decision(result["final_decision"])
+        window_translated = (
+            translator.translate_payload(
+                {
+                    "temperature":
+                        agent_state["w_temp"],
 
-        ambient = df.iloc[1200 + step]["temperature"]
-        next_state = update_classroom_physics(agent_state, signals, occupancy=occ, ambient_temp=ambient)
+                    "co2":
+                        agent_state["w_co2"],
 
-        experiment_logs.append({
-            "step": step, "controller": "Agentic_LangGraph", "occupancy": occ,
-            "w_temp": agent_state["w_temp"], "w_co2": agent_state["w_co2"],
-            "i_temp": agent_state["i_temp"], "i_co2": agent_state["i_co2"],
-            "hvac_mode": signals["hvac_mode"], "vav_window": signals["window_damper_pct"],
-            "vav_interior": signals["interior_damper_pct"], "vent_fan": signals["fan_speed"]
-        })
-        agent_state = next_state
-        time.sleep(2.0)  
+                    "humidity": 55.0,
+                },
 
-    print("\n[Executing Simulation Run B: Hysteresis Controller Baseline]")
-    base_state = start_state.copy()
+                window_preferences,
+            )
+        )
+
+        interior_translated = (
+            translator.translate_payload(
+                {
+                    "temperature":
+                        agent_state["i_temp"],
+
+                    "co2":
+                        agent_state["i_co2"],
+
+                    "humidity": 55.0,
+                },
+
+                interior_preferences,
+            )
+        )
+
+        result = hvac_app.invoke(
+            create_agent_state(
+                step=step,
+                phase=phase,
+
+                window_translated=
+                    window_translated,
+
+                interior_translated=
+                    interior_translated,
+            )
+        )
+
+        signals = result["control_signals"]
+
+        ambient_temperature = float(
+            classroom_data.iloc[
+                1200 + step
+            ]["temperature"]
+        )
+
+        experiment_logs.append(
+            {
+                "step": step,
+
+                "controller":
+                    "Agentic_LangGraph",
+
+                "phase": phase,
+
+                "occupancy": occupancy,
+
+                "ambient_temp":
+                    ambient_temperature,
+
+                "w_temp":
+                    agent_state["w_temp"],
+
+                "w_co2":
+                    agent_state["w_co2"],
+
+                "i_temp":
+                    agent_state["i_temp"],
+
+                "i_co2":
+                    agent_state["i_co2"],
+
+                "hvac_mode":
+                    signals["hvac_mode"],
+
+                "vav_window":
+                    signals[
+                        "window_damper_pct"
+                    ],
+
+                "vav_interior":
+                    signals[
+                        "interior_damper_pct"
+                    ],
+
+                "vent_fan":
+                    signals["fan_speed"],
+
+                "decision_source":
+                    result["decision_source"],
+            }
+        )
+
+        reasoning_logs.append(
+            {
+                "step": step,
+
+                "phase": phase,
+
+                "occupancy": occupancy,
+
+                "window_agent":
+                    result["messages"][0],
+
+                "interior_agent":
+                    result["messages"][1],
+
+                "raw_supervisor_output":
+                    result[
+                        "raw_supervisor_output"
+                    ],
+
+                "supervisor_reasoning":
+                    result["final_decision"],
+
+                "hvac_mode":
+                    signals["hvac_mode"],
+
+                "window_damper_pct":
+                    signals[
+                        "window_damper_pct"
+                    ],
+
+                "interior_damper_pct":
+                    signals[
+                        "interior_damper_pct"
+                    ],
+
+                "fan_speed":
+                    signals["fan_speed"],
+
+                "decision_source":
+                    result["decision_source"],
+
+                "validation_error":
+                    result.get(
+                        "validation_error",
+                        "",
+                    ),
+            }
+        )
+
+        agent_state = update_classroom_physics(
+            current_state=agent_state,
+            control=signals,
+            occupancy=occupancy,
+            ambient_temp=ambient_temperature,
+        )
+
+        time.sleep(1.0)
+
+    # =====================================================
+    # RULE-BASED BASELINE
+    # =====================================================
+
+    print(
+        "RUN B: Rule-Based Baseline"
+    )
+
+    baseline_state = initial_state.copy()
+
     for step in range(1, steps + 1):
-        occ, phase = schedule[step]
-        print(f"  Step {step}/12 - {phase} | Students: {occ} ...")
-        
-        signals = run_baseline_controller(base_state, w_pref, i_pref)
+        occupancy, phase = schedule[step]
 
-        ambient = df.iloc[1200 + step]["temperature"]
-        next_state = update_classroom_physics(base_state, signals, occupancy=occ, ambient_temp=ambient)
+        signals = run_baseline_controller(
+            room_state=baseline_state,
 
-        experiment_logs.append({
-            "step": step, "controller": "Baseline_Rule_Based", "occupancy": occ,
-            "w_temp": base_state["w_temp"], "w_co2": base_state["w_co2"],
-            "i_temp": base_state["i_temp"], "i_co2": base_state["i_co2"],
-            "hvac_mode": signals["hvac_mode"], "vav_window": signals["window_damper_pct"],
-            "vav_interior": signals["interior_damper_pct"], "vent_fan": signals["fan_speed"]
-        })
-        base_state = next_state
+            window_preferences=
+                window_preferences,
 
-    pd.DataFrame(experiment_logs).to_csv("simulation_results.csv", index=False)
-    print("\n✅ Simulation cycle completed. Compiled telemetry exported to 'simulation_results.csv'!")
+            interior_preferences=
+                interior_preferences,
+        )
+
+        ambient_temperature = float(
+            classroom_data.iloc[
+                1200 + step
+            ]["temperature"]
+        )
+
+        experiment_logs.append(
+            {
+                "step": step,
+
+                "controller":
+                    "Baseline_Rule_Based",
+
+                "phase": phase,
+
+                "occupancy": occupancy,
+
+                "ambient_temp":
+                    ambient_temperature,
+
+                "w_temp":
+                    baseline_state["w_temp"],
+
+                "w_co2":
+                    baseline_state["w_co2"],
+
+                "i_temp":
+                    baseline_state["i_temp"],
+
+                "i_co2":
+                    baseline_state["i_co2"],
+
+                "hvac_mode":
+                    signals["hvac_mode"],
+
+                "vav_window":
+                    signals[
+                        "window_damper_pct"
+                    ],
+
+                "vav_interior":
+                    signals[
+                        "interior_damper_pct"
+                    ],
+
+                "vent_fan":
+                    signals["fan_speed"],
+
+                "decision_source":
+                    "direct_rule_based",
+            }
+        )
+
+        baseline_state = (
+            update_classroom_physics(
+                current_state=baseline_state,
+                control=signals,
+                occupancy=occupancy,
+                ambient_temp=ambient_temperature,
+            )
+        )
+
+    simulation_dataframe = pd.DataFrame(
+        experiment_logs
+    )
+
+    reasoning_dataframe = pd.DataFrame(
+        reasoning_logs
+    )
+
+    simulation_dataframe.to_csv(
+        "simulation_results.csv",
+        index=False,
+    )
+
+    reasoning_dataframe.to_csv(
+        "reasoning_audit.csv",
+        index=False,
+    )
+
+    source_counts = (
+        reasoning_dataframe[
+            "decision_source"
+        ].value_counts()
+    )
+
+    print("\nSimulation completed.")
+
+    print(
+        f"simulation_results.csv: "
+        f"{len(simulation_dataframe)} rows"
+    )
+
+    print(
+        f"reasoning_audit.csv: "
+        f"{len(reasoning_dataframe)} rows"
+    )
+
+    print("\nAgentic decision sources:")
+
+    print(
+        source_counts.to_string()
+    )
+
 
 if __name__ == "__main__":
-    if not os.environ.get("GROQ_API_KEY"):
-        print("\n⚠️ ERROR: No GROQ_API_KEY environment variable detected.")
-        sys.exit(1)
     run_simulation_campaign()

@@ -1,25 +1,25 @@
-step,controller,occupancy,w_temp,w_co2,i_temp,i_co2,hvac_mode,vav_window,vav_interior,vent_fan
-1,Agentic_LangGraph,40,24.5,450.0,23.5,480.0,COOL,60,40,LOW
-2,Agentic_LangGraph,40,24.38,701.5,23.44,899.2,COOL,60,40,MED
-3,Agentic_LangGraph,5,24.27,894.2,23.38,1253.3,COOL,60,40,HIGH
-4,Agentic_LangGraph,25,24.0,783.3,23.01,1136.5,COOL,60,80,MED
-5,Agentic_LangGraph,25,23.84,877.8,22.27,1210.3,COOL,80,60,HIGH
-6,Agentic_LangGraph,0,23.41,823.5,21.84,1198.6,COOL,60,40,HIGH
-7,Agentic_LangGraph,45,23.17,711.0,21.49,1046.9,COOL,60,40,MED
-8,Agentic_LangGraph,45,23.16,928.7,21.56,1428.3,COOL,60,80,MED
-9,Agentic_LangGraph,10,23.15,1100.7,21.06,1612.4,COOL,20,30,MED
-10,Agentic_LangGraph,20,23.54,1145.7,20.97,1621.1,COOL,60,80,HIGH
-11,Agentic_LangGraph,20,23.39,1025.2,20.27,1267.0,COOL,60,40,MED
-12,Agentic_LangGraph,0,23.25,1041.9,20.16,1377.6,COOL,80,60,HIGH
-1,Baseline_Rule_Based,40,24.5,450.0,23.5,480.0,COOL,93,10,OFF
-2,Baseline_Rule_Based,40,23.92,706.0,23.87,904.0,COOL,73,10,LOW
-3,Baseline_Rule_Based,5,23.65,928.5,24.22,1320.4,COOL,63,10,HIGH
-4,Baseline_Rule_Based,25,23.38,795.7,24.24,1353.2,COOL,54,10,HIGH
-5,Baseline_Rule_Based,25,23.34,842.5,24.44,1576.0,COOL,52,15,HIGH
-6,Baseline_Rule_Based,0,23.34,879.4,24.56,1750.2,COOL,52,19,HIGH
-7,Baseline_Rule_Based,45,23.22,769.8,24.4,1636.3,COOL,48,13,HIGH
-8,Baseline_Rule_Based,45,23.38,946.3,24.73,2011.9,COOL,54,25,HIGH
-9,Baseline_Rule_Based,10,23.44,1052.3,24.88,2242.1,COOL,56,30,HIGH
-10,Baseline_Rule_Based,20,23.3,927.1,24.64,2046.5,COOL,51,22,HIGH
-11,Baseline_Rule_Based,20,23.29,913.8,24.61,2061.2,COOL,50,21,HIGH
-12,Baseline_Rule_Based,0,23.3,907.7,24.6,2083.9,COOL,51,21,HIGH
+step,controller,phase,occupancy,ambient_temp,w_temp,w_co2,i_temp,i_co2,hvac_mode,vav_window,vav_interior,vent_fan,decision_source
+1,Agentic_LangGraph,Lecture 1 Begins (High Density),40,24.91,24.5,450.0,23.5,480.0,COOL,70,30,MED,llm_validated
+2,Agentic_LangGraph,Lecture 1 Ongoing,40,24.91,24.24,693.8,23.58,895.6,COOL,70,30,MED,llm_validated
+3,Agentic_LangGraph,Mid-Morning Break,5,24.92,24.0,877.8,23.66,1267.6,COOL,50,80,MED,llm_validated
+4,Agentic_LangGraph,Lecture 2 Begins (Medium Density),25,24.91,23.89,861.2,22.71,1112.7,COOL,70,30,MED,llm_validated
+5,Agentic_LangGraph,Lecture 2 Ongoing,25,24.91,23.6,923.2,22.69,1317.9,COOL,50,80,MED,llm_validated
+6,Agentic_LangGraph,Lunch Break (Vacant),0,24.93,23.61,1006.6,21.96,1340.9,COOL,70,30,MED,llm_validated
+7,Agentic_LangGraph,Lecture 3 Begins (Peak Density),45,24.94,23.22,898.0,21.75,1282.1,COOL,70,30,MED,llm_validated
+8,Agentic_LangGraph,Lecture 3 Ongoing,45,24.94,23.07,1059.0,21.95,1661.5,COOL,80,40,HIGH,llm_validated
+9,Agentic_LangGraph,Short Recess,10,24.95,22.78,1025.7,22.0,1830.7,COOL,80,40,HIGH,llm_validated
+10,Agentic_LangGraph,Lab Session,20,24.95,22.34,819.4,21.73,1623.3,OFF,100,0,HIGH,llm_validated
+11,Agentic_LangGraph,Lab Session Ongoing,20,24.96,23.11,715.8,22.13,1855.3,COOL,50,80,MED,llm_validated
+12,Agentic_LangGraph,Class Dismissed,0,24.96,23.13,808.5,21.38,1679.8,COOL,50,80,MED,llm_validated
+1,Baseline_Rule_Based,Lecture 1 Begins (High Density),40,24.91,24.5,450.0,23.5,480.0,COOL,93,10,OFF,direct_rule_based
+2,Baseline_Rule_Based,Lecture 1 Ongoing,40,24.91,23.92,706.0,23.87,904.0,COOL,73,10,LOW,direct_rule_based
+3,Baseline_Rule_Based,Mid-Morning Break,5,24.92,23.65,928.5,24.22,1320.4,COOL,63,10,HIGH,direct_rule_based
+4,Baseline_Rule_Based,Lecture 2 Begins (Medium Density),25,24.91,23.38,795.7,24.24,1353.2,COOL,54,10,HIGH,direct_rule_based
+5,Baseline_Rule_Based,Lecture 2 Ongoing,25,24.91,23.34,842.5,24.44,1576.0,COOL,52,15,HIGH,direct_rule_based
+6,Baseline_Rule_Based,Lunch Break (Vacant),0,24.93,23.34,879.4,24.56,1750.2,COOL,52,19,HIGH,direct_rule_based
+7,Baseline_Rule_Based,Lecture 3 Begins (Peak Density),45,24.94,23.22,769.8,24.4,1636.3,COOL,48,13,HIGH,direct_rule_based
+8,Baseline_Rule_Based,Lecture 3 Ongoing,45,24.94,23.38,946.3,24.73,2011.9,COOL,54,25,HIGH,direct_rule_based
+9,Baseline_Rule_Based,Short Recess,10,24.95,23.44,1052.3,24.88,2242.1,COOL,56,30,HIGH,direct_rule_based
+10,Baseline_Rule_Based,Lab Session,20,24.95,23.3,927.1,24.64,2046.5,COOL,51,22,HIGH,direct_rule_based
+11,Baseline_Rule_Based,Lab Session Ongoing,20,24.96,23.29,913.8,24.61,2061.2,COOL,50,21,HIGH,direct_rule_based
+12,Baseline_Rule_Based,Class Dismissed,0,24.96,23.3,907.7,24.6,2083.9,COOL,51,21,HIGH,direct_rule_based
