@@ -1,16 +1,16 @@
 step,controller,phase,occupancy,ambient_temp,w_temp,w_co2,i_temp,i_co2,hvac_mode,vav_window,vav_interior,vent_fan,decision_source
-1,Agentic_LangGraph,Lecture 1 Begins (High Density),40,24.91,24.5,450.0,23.5,480.0,COOL,70,30,MED,llm_validated
-2,Agentic_LangGraph,Lecture 1 Ongoing,40,24.91,24.24,693.8,23.58,895.6,COOL,70,30,MED,llm_validated
-3,Agentic_LangGraph,Mid-Morning Break,5,24.92,24.0,877.8,23.66,1267.6,COOL,50,80,MED,llm_validated
-4,Agentic_LangGraph,Lecture 2 Begins (Medium Density),25,24.91,23.89,861.2,22.71,1112.7,COOL,70,30,MED,llm_validated
-5,Agentic_LangGraph,Lecture 2 Ongoing,25,24.91,23.6,923.2,22.69,1317.9,COOL,50,80,MED,llm_validated
-6,Agentic_LangGraph,Lunch Break (Vacant),0,24.93,23.61,1006.6,21.96,1340.9,COOL,70,30,MED,llm_validated
-7,Agentic_LangGraph,Lecture 3 Begins (Peak Density),45,24.94,23.22,898.0,21.75,1282.1,COOL,70,30,MED,llm_validated
-8,Agentic_LangGraph,Lecture 3 Ongoing,45,24.94,23.07,1059.0,21.95,1661.5,COOL,80,40,HIGH,llm_validated
-9,Agentic_LangGraph,Short Recess,10,24.95,22.78,1025.7,22.0,1830.7,COOL,80,40,HIGH,llm_validated
-10,Agentic_LangGraph,Lab Session,20,24.95,22.34,819.4,21.73,1623.3,OFF,100,0,HIGH,llm_validated
-11,Agentic_LangGraph,Lab Session Ongoing,20,24.96,23.11,715.8,22.13,1855.3,COOL,50,80,MED,llm_validated
-12,Agentic_LangGraph,Class Dismissed,0,24.96,23.13,808.5,21.38,1679.8,COOL,50,80,MED,llm_validated
+1,Agentic_LangGraph,Lecture 1 Begins (High Density),40,24.91,24.5,450.0,23.5,480.0,COOL,100,8,OFF,llm_validated
+2,Agentic_LangGraph,Lecture 1 Ongoing,40,24.91,23.82,706.0,23.9,904.0,COOL,100,29,LOW,llm_validated
+3,Agentic_LangGraph,Mid-Morning Break,5,24.92,23.18,916.1,23.98,1306.1,COOL,100,100,HIGH,llm_validated
+4,Agentic_LangGraph,Lecture 2 Begins (Medium Density),25,24.91,22.41,673.4,22.74,850.4,COOL,90,10,LOW,llm_validated
+5,Agentic_LangGraph,Lecture 2 Ongoing,25,24.91,21.92,811.5,23.0,1123.6,OFF,20,40,MED,llm_validated
+6,Agentic_LangGraph,Lunch Break (Vacant),0,24.93,22.74,957.7,23.4,1302.3,COOL,40,40,HIGH,llm_validated
+7,Agentic_LangGraph,Lecture 3 Begins (Peak Density),45,24.94,22.82,863.9,22.99,1125.7,COOL,100,25,MED,llm_validated
+8,Agentic_LangGraph,Lecture 3 Ongoing,45,24.94,22.26,984.5,23.21,1534.2,OFF,40,65,HIGH,llm_validated
+9,Agentic_LangGraph,Short Recess,10,24.95,23.16,1127.2,23.78,1563.9,COOL,100,100,HIGH,llm_validated
+10,Agentic_LangGraph,Lab Session,20,24.95,22.42,784.9,22.59,1001.6,OFF,20,40,MED,llm_validated
+11,Agentic_LangGraph,Lab Session Ongoing,20,24.96,23.19,906.0,22.96,1149.4,COOL,100,25,MED,llm_validated
+12,Agentic_LangGraph,Class Dismissed,0,24.96,22.49,876.9,22.96,1315.8,COOL,40,40,HIGH,llm_validated
 1,Baseline_Rule_Based,Lecture 1 Begins (High Density),40,24.91,24.5,450.0,23.5,480.0,COOL,93,10,OFF,direct_rule_based
 2,Baseline_Rule_Based,Lecture 1 Ongoing,40,24.91,23.92,706.0,23.87,904.0,COOL,73,10,LOW,direct_rule_based
 3,Baseline_Rule_Based,Mid-Morning Break,5,24.92,23.65,928.5,24.22,1320.4,COOL,63,10,HIGH,direct_rule_based
